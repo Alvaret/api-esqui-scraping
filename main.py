@@ -28,17 +28,14 @@ app.add_middleware(
 # Variables globales
 ultima_actualizacion = None
 
-# Estaciones disponibles
-ESTACIONES = {
-    'sierra-nevada': 'https://www.infonieve.es/estacion-esqui/sierra-nevada/',
-    'baqueira-beret': 'https://www.infonieve.es/estacion-esqui/baqueira-beret/',
-    'formigal': 'https://www.infonieve.es/estacion-esqui/formigal/',
-    'candanchu': 'https://www.infonieve.es/estacion-esqui/candanchu/',
-    'jaca-astun': 'https://www.infonieve.es/estacion-esqui/jaca-astun/',
-}
+# URL base para construir las URLs de las estaciones
+BASE_URL = 'https://www.infonieve.es/estacion-esqui/'
 
-def scrape_estacion(slug: str, url: str) -> dict:
+def scrape_estacion(slug: str) -> dict:
     """Extrae datos de una estación de esquí"""
+    
+    # Construir la URL completa
+    url = f"{BASE_URL}{slug}/"
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -131,45 +128,55 @@ async def root():
     }
 
 @app.get("/estaciones")
-async def get_all_estaciones():
-    """Obtiene datos de todas las estaciones (scraping en tiempo real)"""
+async def get_all_estaciones(estaciones: str = None):
+    """Obtiene datos de múltiples estaciones (scraping en tiempo real)
+    
+    Parámetros:
+    - estaciones: Lista de slugs separados por coma (ej: sierra-nevada,candanchu)
+    """
     global ultima_actualizacion
     
-    print(f"[{datetime.now()}] Scrapeando todas las estaciones...")
+    if estaciones:
+        # Si se proporcionan estaciones específicas
+        slugs = [slug.strip() for slug in estaciones.split(',')]
+    else:
+        # Estaciones por defecto si no se especifica ninguna
+        slugs = ['sierra-nevada', 'baqueira-beret', 'formigal', 'candanchu', 'jaca-astun']
     
-    estaciones = []
-    for slug, url in ESTACIONES.items():
-        datos = scrape_estacion(slug, url)
-        estaciones.append(datos)
+    print(f"[{datetime.now()}] Scrapeando estaciones: {', '.join(slugs)}...")
+    
+    resultados = []
+    for slug in slugs:
+        datos = scrape_estacion(slug)
+        resultados.append(datos)
     
     ultima_actualizacion = datetime.now().isoformat()
     
     return {
-        "estaciones": estaciones,
-        "total": len(estaciones),
+        "estaciones": resultados,
+        "total": len(resultados),
         "ultima_actualizacion": ultima_actualizacion
     }
 
 @app.get("/estacion/{slug}")
 async def get_estacion(slug: str):
-    """Obtiene datos de una estación específica (scraping en tiempo real)"""
+    """Obtiene datos de una estación específica (scraping en tiempo real)
     
-    if slug not in ESTACIONES:
-        return {
-            "error": f"Estación '{slug}' no encontrada",
-            "estaciones_disponibles": list(ESTACIONES.keys())
-        }
+    El slug debe corresponder con el nombre de la URL en infonieve.es
+    Ejemplo: sierra-nevada, candanchu, valdelinares, boi-taull, etc.
+    """
     
     print(f"[{datetime.now()}] Scrapeando {slug}...")
-    url = ESTACIONES[slug]
-    return scrape_estacion(slug, url)
+    return scrape_estacion(slug)
 
 @app.get("/status")
 async def get_status():
     """Estado de la API"""
     return {
         "status": "ok",
-        "estaciones_disponibles": len(ESTACIONES),
+        "base_url": BASE_URL,
+        "descripcion": "Acepta cualquier slug de estación de infonieve.es",
+        "ejemplos": ["sierra-nevada", "candanchu", "valdelinares", "boi-taull", "baqueira-beret"],
         "ultima_actualizacion": ultima_actualizacion,
         "timestamp": datetime.now().isoformat()
     }
