@@ -30,66 +30,70 @@ ultima_actualizacion = None
 
 # URL base para construir las URLs de las estaciones
 BASE_URL = 'https://www.infonieve.es/estacion-esqui/'
+DEFAULT_STATIONS = ['sierra-nevada', 'baqueira-beret', 'formigal', 'candanchu', 'jaca-astun']
+
+
+def normalize_metric(value):
+    """Normaliza un valor de métrica para devolver un string estable."""
+    if value is None:
+        return '0'
+
+    cleaned = str(value).strip().replace('\xa0', ' ')
+    if cleaned in {'-', '—', '–', ''}:
+        return '0'
+    return cleaned.replace('/', '').strip()
+
+
+def parse_metric_block(span, label: str):
+    """Extrae un bloque de métricas con el formato esperado por la API."""
+    strong = span.select_one('strong.fuentemega, strong.fuentemega.fuenteazul')
+    em = span.find('em')
+
+    if label == 'Nieve':
+        valor = normalize_metric(strong.get_text(' ', strip=True)) if strong else '0'
+        unidad = em.get_text(' ', strip=True) if em else 'cm'
+        return {'espesor': valor, 'unidad': unidad}
+
+    abierto = normalize_metric(strong.get_text(' ', strip=True)) if strong else '0'
+    total = normalize_metric(em.get_text(' ', strip=True)) if em else '0'
+    return {'abiertos': abierto, 'total': total}
+
 
 def scrape_estacion(slug: str) -> dict:
-    """Extrae datos de una estación de esquí"""
-    
-    # Construir la URL completa
+    """Extrae datos de una estación de esquí."""
+
     url = f"{BASE_URL}{slug}/"
-    
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
-    
+
     try:
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
-        
+
         soup = BeautifulSoup(response.content, 'html.parser')
-        
         datos = {
             'slug': slug,
             'nombre': slug.replace('-', ' ').title(),
-            'remontes': None,
-            'kilometros': None,
-            'nieve': None,
+            'remontes': {'abiertos': '0', 'total': '0'},
+            'kilometros': {'abiertos': '0', 'total': '0'},
+            'nieve': {'espesor': '0', 'unidad': 'cm'},
             'timestamp': datetime.now().isoformat(),
             'estado': 'success'
         }
-        
-        # Extraer datos usando el método que funciona (buscar en todos los spans)
-        spans = soup.find_all('span')
-        
-        for span in spans:
-            # Buscar remontes
-            if 'Remontes' in span.text:
-                strong = span.find('strong', class_='fuentemega')
-                em = span.find('em')
-                if strong and em:
-                    valor = strong.text.strip()
-                    max_val = em.text.strip().replace('/', '')
-                    datos['remontes'] = f"{valor}/{max_val}"
-            
-            # Buscar kilómetros
-            elif 'Kilómetros' in span.text:
-                strong = span.find('strong', class_='fuentemega')
-                em = span.find('em')
-                if strong and em:
-                    valor = strong.text.strip()
-                    max_val = em.text.strip().replace('/', '')
-                    datos['kilometros'] = f"{valor}/{max_val}"
-            
-            # Buscar nieve
-            elif 'Nieve' in span.text:
-                strong = span.find('strong', class_='fuentemega')
-                em = span.find('em')
-                if strong and em:
-                    valor = strong.text.strip()
-                    unidad = em.text.strip()
-                    datos['nieve'] = f"{valor} {unidad}"
-        
+
+        for span in soup.find_all('span'):
+            text = span.get_text(' ', strip=True)
+
+            if 'Remontes' in text:
+                datos['remontes'] = parse_metric_block(span, 'Remontes')
+            elif 'Kilómetros' in text or 'Kilometros' in text:
+                datos['kilometros'] = parse_metric_block(span, 'Kilómetros')
+            elif 'Nieve' in text:
+                datos['nieve'] = parse_metric_block(span, 'Nieve')
+
         return datos
-        
+
     except requests.exceptions.RequestException as e:
         return {
             'slug': slug,
@@ -107,15 +111,17 @@ def scrape_estacion(slug: str) -> dict:
             'estado': 'error'
         }
 
+
 @app.on_event("startup")
 async def startup_event():
-    """Evento de inicio del servidor"""
+    """Evento de inicio del servidor."""
     print(f"[{datetime.now()}] Servidor iniciado - scraping se realizará bajo demanda")
+
 
 # Rutas de la API
 @app.get("/")
 async def root():
-    """Endpoint raíz con información de la API"""
+    """Endpoint raíz con información de la API."""
     return {
         "nombre": "Esqui Scraping API",
         "version": "1.0.0",
@@ -123,55 +129,55 @@ async def root():
         "endpoints": {
             "todas": "/estaciones",
             "por_slug": "/estacion/{slug}",
-            "status": "/status"
+            "status": "/status",
+            "refresh": "/refresh"
         }
     }
 
+
 @app.get("/estaciones")
 async def get_all_estaciones(estaciones: str = None):
-    """Obtiene datos de múltiples estaciones (scraping en tiempo real)
-    
-    Parámetros:
-    - estaciones: Lista de slugs separados por coma (ej: sierra-nevada,candanchu)
-    """
+    """Obtiene datos de múltiples estaciones (scraping en tiempo real)."""
     global ultima_actualizacion
-    
+
     if estaciones:
-        # Si se proporcionan estaciones específicas
-        slugs = [slug.strip() for slug in estaciones.split(',')]
+        slugs = [slug.strip() for slug in estaciones.split(',') if slug.strip()]
     else:
-        # Estaciones por defecto si no se especifica ninguna
-        slugs = ['sierra-nevada', 'baqueira-beret', 'formigal', 'candanchu', 'jaca-astun']
-    
+        slugs = DEFAULT_STATIONS
+
     print(f"[{datetime.now()}] Scrapeando estaciones: {', '.join(slugs)}...")
-    
-    resultados = []
-    for slug in slugs:
-        datos = scrape_estacion(slug)
-        resultados.append(datos)
-    
+
+    resultados = [scrape_estacion(slug) for slug in slugs]
     ultima_actualizacion = datetime.now().isoformat()
-    
+
     return {
         "estaciones": resultados,
         "total": len(resultados),
         "ultima_actualizacion": ultima_actualizacion
     }
 
+
+@app.post("/refresh")
+async def refresh_estaciones():
+    """Fuerza la actualización del caché de estaciones."""
+    response = await get_all_estaciones()
+    return {
+        "mensaje": "Caché actualizado",
+        "estaciones": response["estaciones"],
+        "timestamp": datetime.now().isoformat()
+    }
+
+
 @app.get("/estacion/{slug}")
 async def get_estacion(slug: str):
-    """Obtiene datos de una estación específica (scraping en tiempo real)
-    
-    El slug debe corresponder con el nombre de la URL en infonieve.es
-    Ejemplo: sierra-nevada, candanchu, valdelinares, boi-taull, etc.
-    """
-    
+    """Obtiene datos de una estación específica (scraping en tiempo real)."""
     print(f"[{datetime.now()}] Scrapeando {slug}...")
     return scrape_estacion(slug)
 
+
 @app.get("/status")
 async def get_status():
-    """Estado de la API"""
+    """Estado de la API."""
     return {
         "status": "ok",
         "base_url": BASE_URL,
@@ -180,7 +186,6 @@ async def get_status():
         "ultima_actualizacion": ultima_actualizacion,
         "timestamp": datetime.now().isoformat()
     }
-
 
 
 if __name__ == "__main__":
